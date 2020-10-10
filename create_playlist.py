@@ -1,8 +1,9 @@
 import json
 from secrets import spotify_user_id
-from constants import SPOTIFY_API_URL, YOUTUBE_API_URL, HEADERS
+from constants import SPOTIFY_API_URL, YOUTUBE_API_URL, YOUTUBE_URL, HEADERS
 import requests
 import os
+import youtube_dl
 
 import google_auth_oauthlib.flow
 import googleapiclient.discovery
@@ -12,6 +13,7 @@ class CreatePlaylist:
 
     def __init__(self):
         self.youtube_client = self.get_youtube_client()
+        self.all_liked_songs = {}
 
     """
     Step 1: log into youtube
@@ -34,9 +36,35 @@ class CreatePlaylist:
 
         return youtube_client
 
-    # Step 2: get liked videos
+    """
+    Step 2: get liked videos
+    places all of the important info into a dictionary
+    """
     def get_liked_videos(self):
-        pass
+        request = self.youtube_client.videos().list(
+            part="snippet,contentDetails,statistics",
+            myRating="like"
+        )
+        response = request.execute()
+
+        # collect each video and get the important info
+        for item in response["items"]:
+            video_title = item["snippet"]["title"]
+            youtube_url = YOUTUBE_URL.format(item["id"])
+
+            # use youtube_dl to collect song name and artist name
+            # given the video URL, return the song name and artist - use this info to query spotify
+            video = youtube_dl.YoutubeDL({}).extract_info(youtube_url, download=False)
+            song_name = video["track"]
+            artist = video["artist"]
+
+            self.all_liked_songs[video_title] = {
+                "youtube_url": youtube_url,
+                "song_name": song_name,
+                "artist": artist,
+                # fetch the spotify link at the same time as the liked youtube video
+                "spotify_uri": self.get_spotify_uri(song_name, artist)
+            }
 
     """
     Step 3: create a new playlist in spotify
