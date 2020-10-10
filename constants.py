@@ -10,3 +10,6 @@ HEADERS = {
     "Content-Type": "application/json",
     "Authorization": "Bearer {}".format(spotify_api_token)
 }
+
+# Playlist information
+PLAYLIST_NAME = "YouTube Likes"

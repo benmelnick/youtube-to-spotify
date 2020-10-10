@@ -1,6 +1,6 @@
 import json
 from secrets import spotify_user_id
-from constants import SPOTIFY_API_URL, YOUTUBE_API_URL, YOUTUBE_URL, HEADERS
+from constants import PLAYLIST_NAME, SPOTIFY_API_URL, YOUTUBE_API_URL, YOUTUBE_URL, HEADERS
 import requests
 import os
 import youtube_dl
@@ -79,13 +79,25 @@ class CreatePlaylist:
     calls spotify api to create playlist
     """
     def create_playlist(self):
+        # check to make sure the playlist already exists
+        query = SPOTIFY_API_URL + "/users/{}/playlists".format(spotify_user_id)
+
+        playlists = requests.get(
+            query,
+            headers=HEADERS
+        ).json()
+
+        for playlist in playlists["items"]:
+            if playlist["name"] == PLAYLIST_NAME:
+                print(f"Playlist {PLAYLIST_NAME} already exists")
+                return playlist["id"]
+
         request_body = json.dumps({
-            "name": "YouTube Likes",
+            "name": PLAYLIST_NAME,
             "description": "My liked YouTube videos",
             "public": True
         })
 
-        query = SPOTIFY_API_URL + "/users/{}/playlists".format(spotify_user_id)
         response = requests.post(
             query,
             data=request_body,
