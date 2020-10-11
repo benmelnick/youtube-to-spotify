@@ -2,8 +2,6 @@ from secrets import SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
 from constants import PLAYLIST_NAME, YOUTUBE_API_URL, YOUTUBE_URL, IGNORE
 import os
 import youtube_dl
-import time
-import schedule
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 import sys
@@ -27,7 +25,7 @@ class CreatePlaylist:
     """
     def get_youtube_client(self):
         try:
-            print("Initializing YoutTube client...")
+            print("Initializing YouTube client...")
             # disable OAuthlib's HTTPS verification when running locally
             # DO NOT leave this enabled in production
             os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
@@ -99,7 +97,8 @@ class CreatePlaylist:
                 "song_name": song_name,
                 "artist": artist,
                 # fetch the spotify link at the same time as the liked youtube video
-                "spotify_uri": spotify_uri
+                "spotify_uri": spotify_uri["uri"],
+                "existsInPlaylist": spotify_uri["existsInCache"]
             }
 
     def filter_title(self, video_title):
@@ -144,7 +143,9 @@ class CreatePlaylist:
         playlist_items = self.spotify_client.playlist_items(self.playlist_id)
         count = 0
         for item in playlist_items["items"]:
-            cache[item["track"]["uri"]] = 1
+            uri = item["track"]["uri"]
+            song_name = item["track"]["name"]
+            cache[song_name] = uri
             count += 1
         print(f"Brought {count} song uri's into cache")
 
@@ -154,16 +155,27 @@ class CreatePlaylist:
     Step 4: search for the song in spotify
     """
     def get_spotify_uri(self, song_name, artist):
+        # check the cache
+        for key in self.cache:
+            if key.lower() in song_name.lower():
+                print(f"Found {song_name} in cache")
+                return {"uri": self.cache[key], "existsInCache": True}
+
         print(f"Searching Spotify for {song_name} by {artist}")
         search_query = "artist:{} track:{}".format(artist, song_name)
 
         search_result = self.spotify_client.search(search_query, limit=1, type='track', market=None)
         if search_result["tracks"]["total"] == 0:
             print(f"No Spotify results for song {song_name} by artist {artist}")
+            uri = 0
         else:
             # return the URI
             print(f"Successfully found Spotify results for {song_name} by {artist}")
-            return search_result["tracks"]["items"][-1]["uri"]
+            uri = search_result["tracks"]["items"][-1]["uri"]
+            actual_song_name = search_result["tracks"]["items"][-1]["name"]
+            self.cache[actual_song_name] = uri
+
+        return {"uri": uri, "existsInCache": False}
 
     """
     checks in the playlist to see if the song has been avoided - avoids duplicates
@@ -183,14 +195,11 @@ class CreatePlaylist:
         # grab all of the information for songs
         self.get_liked_videos()
 
-        # get playlist on spotify
-        playlist_id = self.get_playlist()
-
         # collect spotify uri of each song in liked videos
         uris = []
         for song, info in self.all_liked_songs.items():
             song_uri = info["spotify_uri"]
-            if (song_uri is not None) and self.song_does_not_exist(song_uri):
+            if (song_uri is not 0) and (not info["existsInPlaylist"]):
                 # add the uri's for songs that did not already exist
                 uris.append(song_uri)
 
@@ -201,7 +210,7 @@ class CreatePlaylist:
         # add songs to playlist
         print(f"Adding {len(uris)} songs to playlist...")
         print(uris)
-        response = self.spotify_client.playlist_add_items(playlist_id, uris)
+        response = self.spotify_client.playlist_add_items(self.playlist_id, uris)
         print(f"Successfully added {len(uris)} songs to playlist")
         print(response)
 
