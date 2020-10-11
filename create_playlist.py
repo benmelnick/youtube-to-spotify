@@ -1,9 +1,12 @@
-import json
-from secrets import spotify_user_id
-from constants import PLAYLIST_NAME, SPOTIFY_API_URL, YOUTUBE_API_URL, YOUTUBE_URL, HEADERS
-import requests
+from secrets import SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
+from constants import PLAYLIST_NAME, YOUTUBE_API_URL, YOUTUBE_URL
 import os
 import youtube_dl
+import time
+import schedule
+import spotipy
+from spotipy.oauth2 import SpotifyOAuth
+import sys
 
 import google_auth_oauthlib.flow
 import googleapiclient.discovery
@@ -13,28 +16,48 @@ class CreatePlaylist:
 
     def __init__(self):
         self.youtube_client = self.get_youtube_client()
+        self.spotify_client = self.get_spotify_client()
         self.all_liked_songs = {}
+        self.playlist_id = 0
+        self.user_id = 0
 
     """
     Step 1: log into youtube
     """
     def get_youtube_client(self):
-        # disable OAuthlib's HTTPS verification when running locally
-        # DO NOT leave this enabled in production
-        os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+        try:
+            print("Initializing YoutTube client...")
+            # disable OAuthlib's HTTPS verification when running locally
+            # DO NOT leave this enabled in production
+            os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 
-        api_service_name = "youtube"
-        api_version = "v3"
-        client_secrets_file = "client_secret.json"
+            api_service_name = "youtube"
+            api_version = "v3"
+            client_secrets_file = "client_secret.json"
 
-        # get credentials and create an API client
-        scopes = [YOUTUBE_API_URL]
-        flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(client_secrets_file, scopes)
-        credentials = flow.run_console()
+            # get credentials and create an API client
+            scopes = [YOUTUBE_API_URL]
+            flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(client_secrets_file, scopes)
+            credentials = flow.run_console()
 
-        youtube_client = googleapiclient.discovery.build(api_service_name, api_version, credentials=credentials)
+            youtube_client = googleapiclient.discovery.build(api_service_name, api_version, credentials=credentials)
 
-        return youtube_client
+            print("YouTube client initialized")
+            return youtube_client
+        except:
+            sys.exit("Error initializing YouTube client")
+
+    def get_spotify_client(self):
+        try:
+            print("Initializing Spotify client...")
+            scope = "playlist-modify-public"
+            sp = spotipy.Spotify(auth_manager=SpotifyOAuth(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET,
+                                                           redirect_uri="http://localhost:8080/callback", scope=scope))
+            print("Spotify client initialized")
+            return sp
+        except Exception as e:
+            print(e)
+            print("Error initializing Spotify client")
 
     """
     Step 2: get liked videos
@@ -78,56 +101,47 @@ class CreatePlaylist:
     Step 3: create a new playlist in spotify
     calls spotify api to create playlist
     """
-    def create_playlist(self):
+    def get_playlist(self):
+        # get the current user
+        if self.user_id is 0:
+            self.user_id = self.spotify_client.current_user()["id"]
+
+        print(f"Fetching playlists for user {self.user_id}")
+
+        if self.playlist_id:
+            print(f"Playlist {PLAYLIST_NAME} already exists")
+            return self.playlist_id
+
         # check to make sure the playlist already exists
-        query = SPOTIFY_API_URL + "/users/{}/playlists".format(spotify_user_id)
-
-        playlists = requests.get(
-            query,
-            headers=HEADERS
-        ).json()
-
+        playlists = self.spotify_client.current_user_playlists()
         for playlist in playlists["items"]:
             if playlist["name"] == PLAYLIST_NAME:
                 print(f"Playlist {PLAYLIST_NAME} already exists")
-                return playlist["id"]
+                playlist_id = playlist["id"]
+                self.playlist_id = playlist_id
+                return playlist_id
 
-        request_body = json.dumps({
-            "name": PLAYLIST_NAME,
-            "description": "My liked YouTube videos",
-            "public": True
-        })
+        new_playlist = self.spotify_client.user_playlist_create(self.user_id, PLAYLIST_NAME,
+                                                                description="My liked YouTube videos")
+        playlist_id = new_playlist["id"]
+        print(f"Created new playlist {playlist_id}")
+        self.playlist_id = playlist_id
 
-        response = requests.post(
-            query,
-            data=request_body,
-            headers=HEADERS
-        )
-        response_json = response.json()
-
-        return response_json["id"]
+        return playlist_id
 
     """ 
     Step 4: search for the song in spotify
     """
     def get_spotify_uri(self, song_name, artist):
-        query = SPOTIFY_API_URL + "/search?query=track%3A{}+artist%3A{}&type=track&offset=0&limit=20".format(
-            song_name,
-            artist
-        )
-        response = requests.get(
-            query,
-            headers=HEADERS
-        )
-        response_json = response.json()
-        songs = response_json["tracks"]["items"]
+        search_query = "artist:{} track:{}".format(artist, song_name)
 
-        # use just the first song
-        try:
-            uri = songs[0]["uri"]
-            return uri
-        except IndexError:
-            print(F"no Spotify results for song {song_name} by artist {artist}")
+        search_result = self.spotify_client.search(search_query, limit=1, type='track', market=None)
+        print(search_result)
+        if search_result["tracks"]["total"] == 0:
+            print(f"No Spotify results for song {song_name} by artist {artist}")
+        else:
+            # return the URI
+            return search_result["tracks"]["items"][-1]["uri"]
 
     """
     the main body of the code - calls all of the above methods in a single workflow
@@ -143,24 +157,30 @@ class CreatePlaylist:
             if uri is not None:
                 uris.append(uri)
 
+        if len(uris) == 0:
+            print("No songs to add")
+            return
+
         # create new playlist on spotify
-        playlist_id = self.create_playlist()
+        playlist_id = self.get_playlist()
 
-        request_body = json.dumps({
-            "uris": uris
-        })
-        query = SPOTIFY_API_URL + "/playlists/{}/tracks".format(playlist_id)
+        print(uris)
 
-        response = requests.put(
-            query,
-            data=request_body,
-            headers=HEADERS
-        )
-        response_json = response.json()
-
-        return response_json
+        # add songs to playlist
+        response = self.spotify_client.playlist_add_items(playlist_id, uris)
+        print(response)
 
 
-if __name__ == '__main__':
-    cp = CreatePlaylist()
+def run(cp):
     cp.add_song_to_playlist()
+
+
+# main code
+if __name__ == "__main__":
+    create_playlist = CreatePlaylist()
+    schedule.every(1).minutes.do(run, create_playlist)
+
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
