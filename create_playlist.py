@@ -20,6 +20,7 @@ class CreatePlaylist:
         self.all_liked_songs = {}
         self.user_id = self.get_user_id()
         self.playlist_id = self.get_playlist()
+        self.cache = self.init_cache()
 
     """
     Step 1: log into youtube
@@ -137,6 +138,18 @@ class CreatePlaylist:
 
         return playlist_id
 
+    def init_cache(self):
+        print("Populating cache...")
+        cache = {}
+        playlist_items = self.spotify_client.playlist_items(self.playlist_id)
+        count = 0
+        for item in playlist_items["items"]:
+            cache[item["track"]["uri"]] = 1
+            count += 1
+        print(f"Brought {count} song uri's into cache")
+
+        return cache
+
     """ 
     Step 4: search for the song in spotify
     """
@@ -156,11 +169,13 @@ class CreatePlaylist:
     checks in the playlist to see if the song has been avoided - avoids duplicates
     """
     def song_does_not_exist(self, song_uri):
-        playlist_items = self.spotify_client.playlist_items(self.playlist_id)
-        for item in playlist_items["items"]:
-            if item["track"]["uri"] == song_uri:
-                print(f"{song_uri} already exists in playlist")
-                return False
+        # check the cache to see if song already exists in the playlist
+        if song_uri in self.cache:
+            return False
+        else:
+            # cache miss - add to the cache
+            self.cache[song_uri] = 1
+            return True
     """
     the main body of the code - calls all of the above methods in a single workflow
     """
@@ -176,6 +191,7 @@ class CreatePlaylist:
         for song, info in self.all_liked_songs.items():
             song_uri = info["spotify_uri"]
             if (song_uri is not None) and self.song_does_not_exist(song_uri):
+                # add the uri's for songs that did not already exist
                 uris.append(song_uri)
 
         if len(uris) == 0:
